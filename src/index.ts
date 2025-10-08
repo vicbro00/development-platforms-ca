@@ -1,5 +1,5 @@
 //* CORS *//
-import express from "express";
+import express, { Request, Response, NextFunction} from "express";
 import dotenv from "dotenv";
 import cors from "cors";
 import jwt from "jsonwebtoken";
@@ -37,6 +37,11 @@ interface Article {
   category: string;
   submitted_by: number;
   created_at: string;
+}
+
+// Interface for authenticating users
+interface AuthenticatedRequest extends Request {
+    user?: { userId: number };
 }
 
 // Get all users from the database
@@ -157,6 +162,58 @@ app.get("/articles", async (req, res) => {
     console.error("Database query error:", error);
     res.status(500).json({ error: "Failed to fetch articles" });
   }
+});
+
+// Authentication
+function authenticateToken(req: AuthenticatedRequest, res: Response, next: NextFunction) {
+    const authHeader = req.headers["authorization"];
+    const token = authHeader && authHeader.split(" ")[1];
+
+    if (!token) {
+        return res.status(401).json({ error: "Access denied. No token provided." });
+    }
+
+    try {
+        if (!process.env.JWT_SECRET) {
+            throw new Error("JWT_SECRET not defined");
+        }
+
+        const decoded = jwt.verify(token, process.env.JWT_SECRET) as { userId: number };
+        req.user = decoded;
+        next();
+    } catch (err) {
+        return res.status(403).json({ error: "Invalid token" });
+    }
+}
+
+// Create new article
+app.post("/articles", authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
+    try {
+        const { title, body, category } = req.body;
+
+        if (!title || !body || !category) {
+            return res.status(400).json({ error: "Title, body, and category are required" });
+        }
+
+        const submitted_by = req.user?.userId;
+
+        if (!submitted_by) {
+            return res.status(401).json({ error: "Unauthorized" });
+        }
+
+        const [result]: [ResultSetHeader, any] = await pool.execute(
+            "INSERT INTO articles (title, body, category, submitted_by) VALUES (?, ?, ?, ?)",
+            [title, body, category, submitted_by]
+        );
+
+        res.status(201).json({
+            message: "Article created successfully",
+            articleId: result.insertId,
+        });
+    } catch (error) {
+        console.error("Database insert error:", error);
+        res.status(500).json({ error: "Failed to create article" });
+    }
 });
 
 app.listen(PORT, () => {
